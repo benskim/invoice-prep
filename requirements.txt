@@ -1,2 +1,6 @@
 streamlit
-openai
+pandas
+numpy
+pytesseract
+pdf2image
+Pillow
