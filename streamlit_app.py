@@ -4,15 +4,7 @@ import re
 import unicodedata
 from collections import defaultdict
 
-# PDF optional
-try:
-    import pytesseract
-    import pdf2image
-    PDF_ENABLED = True
-except:
-    PDF_ENABLED = False
-
-st.title("🔍 PO vs Invoice Matching (PDF + Excel)")
+st.title("🔍 PO vs Invoice Matching (Excel Only)")
 
 # -----------------------------
 # Normalize
@@ -31,7 +23,7 @@ def tokenize(s):
     return s.split("|") if s else []
 
 # -----------------------------
-# Column Detection (Excel)
+# Column Detection
 # -----------------------------
 def detect_columns(df):
     part_k = ["PART", "P/N", "MODEL", "ITEM"]
@@ -53,39 +45,6 @@ def detect_columns(df):
             cols["vendor"] = col
 
     return cols
-
-# -----------------------------
-# PDF → DataFrame
-# -----------------------------
-def pdf_to_df(pdf_file):
-    images = pdf2image.convert_from_bytes(pdf_file.read())
-    rows = []
-    vendor = None
-    po_number = None
-
-    for img in images:
-        text = pytesseract.image_to_string(img)
-
-        for line in text.split("\n"):
-            line = line.strip()
-
-            # Vendor 추출
-            if "VENDOR" in line.upper():
-                vendor = line.split(":")[-1].strip()
-
-            # PO 번호 추출
-            if "PO" in line.upper():
-                po_number = line.split(":")[-1].strip()
-
-            # Part + Qty 추출
-            match = re.match(r'(.+?)\s+(\d+)$', line.upper())
-            if match:
-                part = match.group(1).strip()
-                qty = int(match.group(2))
-                rows.append((part, qty, vendor, po_number))
-
-    df = pd.DataFrame(rows, columns=["Part Number", "Qty", "Vendor", "PO"])
-    return df
 
 # -----------------------------
 # Similarity
@@ -117,52 +76,28 @@ def sim_score(a, b):
     return 0.7 * prefix_sim(a, b) + 0.3 * token_sim(t1, t2)
 
 # -----------------------------
-# File Upload
+# Upload
 # -----------------------------
-st.subheader("Upload PO")
-po_excel = st.file_uploader("PO Excel", type=["xlsx"], key="po_excel")
-po_pdf = st.file_uploader("PO PDF", type=["pdf"], key="po_pdf")
+po_file = st.file_uploader("Upload PO Excel", type=["xlsx"])
+inv_file = st.file_uploader("Upload Invoice Excel", type=["xlsx"])
 
-st.subheader("Upload Invoice")
-inv_excel = st.file_uploader("Invoice Excel", type=["xlsx"], key="inv_excel")
-inv_pdf = st.file_uploader("Invoice PDF", type=["pdf"], key="inv_pdf")
+if po_file and inv_file:
 
-# -----------------------------
-# Load PO
-# -----------------------------
-po_df = None
+    po_df = pd.read_excel(po_file)
+    inv_df = pd.read_excel(inv_file)
 
-if po_excel:
-    po_df = pd.read_excel(po_excel)
-    m = detect_columns(po_df)
-    po_df["Part Number"] = po_df[m["part"]]
-    po_df["Qty"] = po_df[m["qty"]]
-    po_df["Vendor"] = po_df[m["vendor"]] if m["vendor"] else "UNKNOWN"
-    po_df["PO"] = po_df[m["po"]] if m["po"] else "UNKNOWN"
+    po_map = detect_columns(po_df)
+    inv_map = detect_columns(inv_df)
 
-elif po_pdf and PDF_ENABLED:
-    po_df = pdf_to_df(po_pdf)
+    po_df["Part Number"] = po_df[po_map["part"]]
+    po_df["Qty"] = po_df[po_map["qty"]]
+    po_df["Vendor"] = po_df[po_map["vendor"]] if po_map["vendor"] else "UNKNOWN"
+    po_df["PO"] = po_df[po_map["po"]] if po_map["po"] else "UNKNOWN"
 
-# -----------------------------
-# Load Invoice
-# -----------------------------
-inv_df = None
-
-if inv_excel:
-    inv_df = pd.read_excel(inv_excel)
-    m = detect_columns(inv_df)
-    inv_df["Part Number"] = inv_df[m["part"]]
-    inv_df["Qty"] = inv_df[m["qty"]]
-    inv_df["Vendor"] = inv_df[m["vendor"]] if m["vendor"] else "UNKNOWN"
-    inv_df["PO"] = inv_df[m["po"]] if m["po"] else "UNKNOWN"
-
-elif inv_pdf and PDF_ENABLED:
-    inv_df = pdf_to_df(inv_pdf)
-
-# -----------------------------
-# Matching
-# -----------------------------
-if po_df is not None and inv_df is not None:
+    inv_df["Part Number"] = inv_df[inv_map["part"]]
+    inv_df["Qty"] = inv_df[inv_map["qty"]]
+    inv_df["Vendor"] = inv_df[inv_map["vendor"]] if inv_map["vendor"] else "UNKNOWN"
+    inv_df["PO"] = inv_df[inv_map["po"]] if inv_map["po"] else "UNKNOWN"
 
     po_df["norm"] = po_df["Part Number"].apply(normalize)
     inv_df["norm"] = inv_df["Part Number"].apply(normalize)
@@ -176,7 +111,6 @@ if po_df is not None and inv_df is not None:
 
         for i, inv in inv_df.iterrows():
 
-            # PO / Vendor 필터
             if po["PO"] != inv["PO"]:
                 continue
             if po["Vendor"] != inv["Vendor"]:
@@ -221,8 +155,5 @@ if po_df is not None and inv_df is not None:
         if not matched:
             results.append([po["Part Number"], "REVIEW", 0])
 
-    df = pd.DataFrame(results, columns=["Part", "Status", "Score"])
-    st.dataframe(df)
-
-elif (po_pdf or inv_pdf) and not PDF_ENABLED:
-    st.error("PDF 기능을 사용하려면 pytesseract + pdf2image 설치 필요")
+    result_df = pd.DataFrame(results, columns=["Part", "Status", "Score"])
+    st.dataframe(result_df)
